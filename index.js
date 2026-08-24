@@ -14,6 +14,7 @@ const CONFIG = {
     SERVER_PORT: parseInt(process.env.SERVER_PORT, 10) || 58642,
     BOT_USERNAME: process.env.BOT_USERNAME || 'Mai_hu_ek_ninja',
     BOT_PASSWORD: process.env.BOT_PASSWORD || '',
+    MC_VERSION: process.env.MC_VERSION || '1.20.2',
     ATERNOS_USER: process.env.ATERNOS_USER || '',
     ATERNOS_PASS: process.env.ATERNOS_PASS || '',
     RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL || '',
@@ -96,7 +97,6 @@ async function executeAternosStartSequence() {
         log('🌐 [ATERNOS] Login page open kar rahe hain...');
         await page.goto('https://aternos.org/go/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-        // Cookie/Consent Popup bypass
         try {
             const consentBtn = await page.waitForSelector('.fc-cta-consent, .cookie-consent-accept, button[aria-label="Consent"]', { timeout: 6000 });
             if (consentBtn) {
@@ -105,19 +105,16 @@ async function executeAternosStartSequence() {
             }
         } catch (e) {}
 
-        // 1. Enter Username
         const userSelector = '#user, input[name="user"], input[type="text"]';
         await page.waitForSelector(userSelector, { timeout: 35000 });
         await page.click(userSelector);
         await page.type(userSelector, CONFIG.ATERNOS_USER, { delay: 30 });
         
-        // 2. Wait explicitly for Password field & Enter Password
         const passSelector = '#password, input[name="password"], input[type="password"]';
         await page.waitForSelector(passSelector, { timeout: 20000 });
         await page.click(passSelector);
         await page.type(passSelector, CONFIG.ATERNOS_PASS, { delay: 30 });
 
-        // 3. Click Login
         const loginBtnSelector = '#login, button[type="submit"], .login-button';
         await page.waitForSelector(loginBtnSelector, { timeout: 15000 });
         await Promise.all([
@@ -127,7 +124,6 @@ async function executeAternosStartSequence() {
 
         log('🔑 [ATERNOS] Login complete. Server panel check kar rahe hain...');
 
-        // 4. Server Selection Handler
         if (page.url().includes('/servers/')) {
             await page.evaluate((targetHost) => {
                 const cleanHost = targetHost.toLowerCase().split('.')[0];
@@ -145,13 +141,11 @@ async function executeAternosStartSequence() {
             await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
         }
 
-        // 5. Click Start Button
         const startBtnSelector = '#start, .btn-start, [id="start"]';
         await page.waitForSelector(startBtnSelector, { timeout: 30000 });
         await page.click(startBtnSelector);
         log('🟢 [ATERNOS] Start button click ho gaya!');
 
-        // 6. Queue Confirmation
         try {
             const confirmBtn = await page.waitForSelector('#confirm, .btn-confirm, [id="confirm"]', { visible: true, timeout: 8000 });
             if (confirmBtn) {
@@ -257,14 +251,15 @@ function connectBot() {
     if (botStatus === 'CONNECTING' || botStatus === 'CONNECTED') return;
 
     botStatus = 'CONNECTING';
-    log(`🤖 [BOT] Joining server as '${CONFIG.BOT_USERNAME}'...`);
+    const versionToUse = CONFIG.MC_VERSION;
+    log(`🤖 [BOT] Joining server as '${CONFIG.BOT_USERNAME}' (Version: ${versionToUse})...`);
 
     try {
         bot = mineflayer.createBot({
             host: CONFIG.SERVER_HOST,
             port: CONFIG.SERVER_PORT,
             username: CONFIG.BOT_USERNAME,
-            version: false
+            version: versionToUse
         });
 
         bot.loadPlugin(pathfinder);
