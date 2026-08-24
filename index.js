@@ -94,25 +94,32 @@ async function executeAternosStartSequence() {
         });
 
         log('🌐 [ATERNOS] Login page open kar rahe hain...');
-        await page.goto('https://aternos.org/login/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto('https://aternos.org/go/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         // Cookie/Consent Popup bypass
         try {
             const consentBtn = await page.waitForSelector('.fc-cta-consent, .cookie-consent-accept, button[aria-label="Consent"]', { timeout: 6000 });
             if (consentBtn) {
                 await consentBtn.click();
-                log('🍪 Cookie consent auto-accepted.');
+                log('🍪 Cookie consent accepted.');
             }
         } catch (e) {}
 
+        // 1. Enter Username
         const userSelector = '#user, input[name="user"], input[type="text"]';
-        await page.waitForSelector(userSelector, { timeout: 40000 });
-        await page.type(userSelector, CONFIG.ATERNOS_USER, { delay: 20 });
+        await page.waitForSelector(userSelector, { timeout: 35000 });
+        await page.click(userSelector);
+        await page.type(userSelector, CONFIG.ATERNOS_USER, { delay: 30 });
         
+        // 2. Wait explicitly for Password field & Enter Password
         const passSelector = '#password, input[name="password"], input[type="password"]';
-        await page.type(passSelector, CONFIG.ATERNOS_PASS, { delay: 20 });
+        await page.waitForSelector(passSelector, { timeout: 20000 });
+        await page.click(passSelector);
+        await page.type(passSelector, CONFIG.ATERNOS_PASS, { delay: 30 });
 
+        // 3. Click Login
         const loginBtnSelector = '#login, button[type="submit"], .login-button';
+        await page.waitForSelector(loginBtnSelector, { timeout: 15000 });
         await Promise.all([
             page.click(loginBtnSelector),
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
@@ -120,6 +127,7 @@ async function executeAternosStartSequence() {
 
         log('🔑 [ATERNOS] Login complete. Server panel check kar rahe hain...');
 
+        // 4. Server Selection Handler
         if (page.url().includes('/servers/')) {
             await page.evaluate((targetHost) => {
                 const cleanHost = targetHost.toLowerCase().split('.')[0];
@@ -137,11 +145,13 @@ async function executeAternosStartSequence() {
             await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
         }
 
+        // 5. Click Start Button
         const startBtnSelector = '#start, .btn-start, [id="start"]';
         await page.waitForSelector(startBtnSelector, { timeout: 30000 });
         await page.click(startBtnSelector);
         log('🟢 [ATERNOS] Start button click ho gaya!');
 
+        // 6. Queue Confirmation
         try {
             const confirmBtn = await page.waitForSelector('#confirm, .btn-confirm, [id="confirm"]', { visible: true, timeout: 8000 });
             if (confirmBtn) {
