@@ -19,7 +19,7 @@ const CONFIG = {
     RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL || '',
     BOT_CHECK_INTERVAL_SEC: 6,
     AUTOSTART_INTERVAL_SEC: 25,
-    COOLDOWN_MS: 240000 // 4-Minute Cooldown to prevent memory spike
+    COOLDOWN_MS: 240000 // 4-Minute Cooldown
 };
 
 let isPuppeteerRunning = false;
@@ -44,7 +44,7 @@ function log(msg) {
     if (logs.length > 80) logs.shift();
 }
 
-// ================= ULTRA LOW-MEMORY ATERNOS AUTOMATION =================
+// ================= ROBUST ATERNOS AUTOMATION =================
 async function executeAternosStartSequence() {
     if (isPuppeteerRunning) return false;
     if (!CONFIG.ATERNOS_USER || !CONFIG.ATERNOS_PASS) {
@@ -59,7 +59,7 @@ async function executeAternosStartSequence() {
 
     isPuppeteerRunning = true;
     lastStartAttemptTime = Date.now();
-    log('🚀 [ATERNOS] Low-memory stealth browser launch kar rahe hain...');
+    log('🚀 [ATERNOS] Stealth browser launch ho raha hai...');
 
     let browser = null;
     try {
@@ -79,37 +79,46 @@ async function executeAternosStartSequence() {
         });
 
         const page = await browser.newPage();
-        await page.setViewport({ width: 1024, height: 600 });
+        await page.setViewport({ width: 1280, height: 720 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             const resType = req.resourceType();
             const url = req.url();
-            if (['image', 'media', 'font', 'stylesheet', 'other'].includes(resType) || url.includes('google') || url.includes('doubleclick')) {
+            if (['image', 'media', 'font'].includes(resType) || url.includes('google-analytics') || url.includes('doubleclick')) {
                 req.abort();
             } else {
                 req.continue();
             }
         });
 
-        log('🌐 [ATERNOS] Login page load ho raha hai...');
-        await page.goto('https://aternos.org/go/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        log('🌐 [ATERNOS] Login page open kar rahe hain...');
+        await page.goto('https://aternos.org/login/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-        const userSelector = '#user, input[name="user"]';
-        await page.waitForSelector(userSelector, { timeout: 30000 });
-        await page.type(userSelector, CONFIG.ATERNOS_USER, { delay: 15 });
+        // Cookie/Consent Popup bypass
+        try {
+            const consentBtn = await page.waitForSelector('.fc-cta-consent, .cookie-consent-accept, button[aria-label="Consent"]', { timeout: 6000 });
+            if (consentBtn) {
+                await consentBtn.click();
+                log('🍪 Cookie consent auto-accepted.');
+            }
+        } catch (e) {}
+
+        const userSelector = '#user, input[name="user"], input[type="text"]';
+        await page.waitForSelector(userSelector, { timeout: 40000 });
+        await page.type(userSelector, CONFIG.ATERNOS_USER, { delay: 20 });
         
-        const passSelector = '#password, input[name="password"]';
-        await page.type(passSelector, CONFIG.ATERNOS_PASS, { delay: 15 });
+        const passSelector = '#password, input[name="password"], input[type="password"]';
+        await page.type(passSelector, CONFIG.ATERNOS_PASS, { delay: 20 });
 
-        const loginBtnSelector = '#login, button[type="submit"]';
+        const loginBtnSelector = '#login, button[type="submit"], .login-button';
         await Promise.all([
             page.click(loginBtnSelector),
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
         ]);
 
-        log('🔑 [ATERNOS] Login successful. Server dhoondh rahe hain...');
+        log('🔑 [ATERNOS] Login complete. Server panel check kar rahe hain...');
 
         if (page.url().includes('/servers/')) {
             await page.evaluate((targetHost) => {
@@ -129,15 +138,15 @@ async function executeAternosStartSequence() {
         }
 
         const startBtnSelector = '#start, .btn-start, [id="start"]';
-        await page.waitForSelector(startBtnSelector, { timeout: 25000 });
+        await page.waitForSelector(startBtnSelector, { timeout: 30000 });
         await page.click(startBtnSelector);
-        log('🟢 [ATERNOS] Server Start button daba diya!');
+        log('🟢 [ATERNOS] Start button click ho gaya!');
 
         try {
             const confirmBtn = await page.waitForSelector('#confirm, .btn-confirm, [id="confirm"]', { visible: true, timeout: 8000 });
             if (confirmBtn) {
                 await confirmBtn.click();
-                log('✅ [ATERNOS] Queue Popup accept kiya!');
+                log('✅ [ATERNOS] Queue Confirmation popup accept ho gaya!');
             }
         } catch (e) {}
 
@@ -145,7 +154,7 @@ async function executeAternosStartSequence() {
         isPuppeteerRunning = false;
         return true;
     } catch (err) {
-        log(`❌ [ATERNOS ERROR] Automation fail: ${err.message}`);
+        log(`❌ [ATERNOS ERROR] ${err.message}`);
         if (browser) await browser.close();
         isPuppeteerRunning = false;
         return false;
@@ -222,12 +231,12 @@ function startReconnectionLoop() {
                 const response = await util.status(CONFIG.SERVER_HOST, CONFIG.SERVER_PORT, { timeout: 3000 });
                 serverStatus = 'ONLINE';
                 lastPingLatency = response.roundTripLatency;
-                log(`🟢 [SERVER LIVE] Online | Players: ${response.players.online}/${response.players.max} | Ping: ${lastPingLatency}ms`);
+                log(`🟢 [SERVER LIVE] Status: ONLINE | Ping: ${lastPingLatency}ms | Connecting bot...`);
                 connectBot();
             } catch (err) {
                 serverStatus = 'OFFLINE';
                 lastPingLatency = null;
-                log(`🔴 [SERVER STATUS] OFFLINE. Agle 8s me check hoga...`);
+                log(`🔴 [SERVER STATUS] OFFLINE. Agle 8s me fir check hoga.`);
             }
         }
     }, 8000);
@@ -238,7 +247,7 @@ function connectBot() {
     if (botStatus === 'CONNECTING' || botStatus === 'CONNECTED') return;
 
     botStatus = 'CONNECTING';
-    log(`🤖 [BOT] Server join kar raha hoon (${CONFIG.BOT_USERNAME})...`);
+    log(`🤖 [BOT] Joining server as '${CONFIG.BOT_USERNAME}'...`);
 
     try {
         bot = mineflayer.createBot({
@@ -252,7 +261,7 @@ function connectBot() {
 
         bot.on('spawn', () => {
             botStatus = 'CONNECTED';
-            log(`✅ [BOT] Successfully join ho gaya! Roaming active.`);
+            log(`✅ [BOT] Successfully join ho gaya! Anti-AFK Roaming active.`);
             startDynamicRoaming(bot);
 
             if (CONFIG.BOT_PASSWORD) {
@@ -269,7 +278,7 @@ function connectBot() {
         });
 
         bot.on('kicked', (reason) => {
-            log(`⚠️ [BOT] Kick ho gaya! Reason: ${reason}`);
+            log(`⚠️ [BOT] Kicked: ${reason}`);
         });
 
         bot.on('end', () => {
@@ -288,7 +297,7 @@ function connectBot() {
 
     } catch (e) {
         botStatus = 'DISCONNECTED';
-        log(`❌ [BOT EXCEPTION] Init error: ${e.message}`);
+        log(`❌ [BOT EXCEPTION] ${e.message}`);
     }
 }
 
@@ -325,7 +334,7 @@ app.get('/', (req, res) => {
         <html>
         <head><title>Aternos Sentinel Dashboard</title><meta http-equiv="refresh" content="5"></head>
         <body style="background:#090d16;color:#e6edf3;font-family:monospace;padding:20px;">
-            <h2>⚡ ATERNOS SENTINEL (LOW-RAM MODE)</h2>
+            <h2>⚡ ATERNOS SENTINEL DASHBOARD</h2>
             <p>Server: <b>${CONFIG.SERVER_HOST}:${CONFIG.SERVER_PORT}</b></p>
             <p>Status: <b style="color:${serverStatus === 'ONLINE' ? '#3fb950' : '#f85149'};">${serverStatus}</b> | Bot: <b>${botStatus}</b></p>
             <p>
