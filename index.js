@@ -16,7 +16,6 @@ const CONFIG = {
     BOT_PASSWORD: process.env.BOT_PASSWORD || '',
     ATERNOS_USER: process.env.ATERNOS_USER || '',
     ATERNOS_PASS: process.env.ATERNOS_PASS || '',
-    DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL || '',
     RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL || '',
     BOT_CHECK_INTERVAL_SEC: 6,
     AUTOSTART_INTERVAL_SEC: 20,
@@ -34,6 +33,7 @@ const PORT = process.env.PORT || 3000;
 let bot = null;
 let serverStatus = 'OFFLINE';
 let botStatus = 'DISCONNECTED';
+let lastPingLatency = null;
 const logs = [];
 
 function log(msg) {
@@ -41,76 +41,83 @@ function log(msg) {
     const entry = `[${time}] ${msg}`;
     console.log(entry);
     logs.push(entry);
-    if (logs.length > 90) logs.shift();
-}
-
-async function sendDiscordAlert(title, message, color = 0x00ff66) {
-    if (!CONFIG.DISCORD_WEBHOOK_URL) return;
-    try {
-        await axios.post(CONFIG.DISCORD_WEBHOOK_URL, {
-            embeds: [{
-                title: title,
-                description: message,
-                color: color,
-                timestamp: new Date().toISOString()
-            }]
-        });
-    } catch (e) {
-        log(`⚠️ Discord Webhook Error: ${e.message}`);
-    }
+    if (logs.length > 100) logs.shift();
 }
 
 // ================= ATERNOS AUTOMATION ENGINE =================
 async function executeAternosStartSequence() {
-    if (isPuppeteerRunning) return false;
+    if (isPuppeteerRunning) {
+        log('⏳ Puppeteer automation pehle se chal rahi hai, naya request ignore kiya.');
+        return false;
+    }
     if (!CONFIG.ATERNOS_USER || !CONFIG.ATERNOS_PASS) {
-        log('❌ Missing ATERNOS_USER or ATERNOS_PASS in environment variables.');
+        log('❌ [CONFIG ERROR] ATERNOS_USER ya ATERNOS_PASS missing hain Environment Variables mein!');
         return false;
     }
 
     const now = Date.now();
-    if (now - lastStartAttemptTime < CONFIG.COOLDOWN_MS) return false;
+    if (now - lastStartAttemptTime < CONFIG.COOLDOWN_MS) {
+        const remainingSec = Math.ceil((CONFIG.COOLDOWN_MS - (now - lastStartAttemptTime)) / 1000);
+        log(`⏳ [COOLDOWN] Aternos start request cooldown par hai. ${remainingSec} seconds baaki hain.`);
+        return false;
+    }
 
     isPuppeteerRunning = true;
     lastStartAttemptTime = Date.now();
-    log('🚀 Launching Stealth Browser to start Aternos server...');
+    log('🚀 [ATERNOS] Launching Stealth Browser to start server...');
 
     let browser = null;
     try {
         browser = await puppeteer.launch({
             headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--window-size=1280,800'
+            ]
         });
 
         const page = await browser.newPage();
+        await page.setViewport({ width: 1280, height: 800 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
-        // Ad-Block & Tracker Interceptor (Saves RAM/CPU)
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             const resType = req.resourceType();
             const url = req.url();
-            if (['image', 'media', 'font', 'stylesheet'].includes(resType) || url.includes('google-analytics') || url.includes('doubleclick') || url.includes('adservice')) {
+            if (['image', 'media', 'font', 'stylesheet'].includes(resType) || url.includes('google-analytics') || url.includes('doubleclick')) {
                 req.abort();
             } else {
                 req.continue();
             }
         });
 
+        log('🌐 [ATERNOS] Navigating to login page...');
         await page.goto('https://aternos.org/go/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await page.waitForSelector('#user', { timeout: 15000 });
-        await page.type('#user', CONFIG.ATERNOS_USER, { delay: 20 });
-        await page.type('#password', CONFIG.ATERNOS_PASS, { delay: 20 });
-        await page.click('#login');
 
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
+        const userSelector = '#user, input[name="user"], .username';
+        await page.waitForSelector(userSelector, { timeout: 30000 });
+        await page.type(userSelector, CONFIG.ATERNOS_USER, { delay: 25 });
+        
+        const passSelector = '#password, input[name="password"], .password';
+        await page.type(passSelector, CONFIG.ATERNOS_PASS, { delay: 25 });
 
-        // Auto-Card Targeter for specific server
+        const loginBtnSelector = '#login, button[type="submit"], .login-button';
+        await Promise.all([
+            page.click(loginBtnSelector),
+            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
+        ]);
+
+        log('🔑 [ATERNOS] Login successful. Locating server panel...');
+
         if (page.url().includes('/servers/')) {
             await page.evaluate((targetHost) => {
-                const cards = document.querySelectorAll('.server-body');
+                const cleanHost = targetHost.toLowerCase().split('.')[0];
+                const cards = document.querySelectorAll('.server-body, .serverbox');
                 for (let card of cards) {
-                    if (card.innerText.toLowerCase().includes(targetHost.toLowerCase().split('.')[0])) {
+                    if (card.innerText.toLowerCase().includes(cleanHost)) {
                         card.click();
                         return;
                     }
@@ -118,28 +125,28 @@ async function executeAternosStartSequence() {
                 const firstServer = document.querySelector('.serverbox, .server-body');
                 if (firstServer) firstServer.click();
             }, CONFIG.SERVER_HOST);
-            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
         }
 
-        await page.waitForSelector('#start', { timeout: 15000 });
-        await page.click('#start');
-        log('🟢 Clicked #start button on Aternos panel.');
+        const startBtnSelector = '#start, .btn-start, [id="start"]';
+        await page.waitForSelector(startBtnSelector, { timeout: 25000 });
+        await page.click(startBtnSelector);
+        log('🟢 [ATERNOS] Start button clicked successfully!');
 
-        // Queue Confirmation Clicker
         try {
-            const confirmBtn = await page.waitForSelector('#confirm, .btn-confirm', { visible: true, timeout: 8000 });
+            const confirmBtn = await page.waitForSelector('#confirm, .btn-confirm, [id="confirm"]', { visible: true, timeout: 10000 });
             if (confirmBtn) {
                 await confirmBtn.click();
-                log('✅ Queue Confirmation Popup Accepted!');
+                log('✅ [ATERNOS] Queue Confirmation Popup accepted!');
             }
         } catch (e) {}
 
-        sendDiscordAlert('⚡ Server Starting', 'Aternos auto-start sequence executed successfully.', 0xffaa00);
         await browser.close();
         isPuppeteerRunning = false;
         return true;
     } catch (err) {
-        log(`❌ Aternos Automation Error: ${err.message}`);
+        log(`❌ [ATERNOS ERROR] Automation fail ho gayi: ${err.message}`);
         if (browser) await browser.close();
         isPuppeteerRunning = false;
         return false;
@@ -207,12 +214,22 @@ function startDynamicRoaming(botInstance) {
     scheduleNextRoam();
 }
 
-// ================= CONTINUOUS RECONNECT LOOP =================
+// ================= CONTINUOUS RECONNECT LOOP & SERVER LIVE DETAILS =================
 function startReconnectionLoop() {
     if (reconnectTimer) return;
-    reconnectTimer = setInterval(() => {
+    reconnectTimer = setInterval(async () => {
         if (botStatus === 'DISCONNECTED') {
-            connectBot();
+            try {
+                const response = await util.status(CONFIG.SERVER_HOST, CONFIG.SERVER_PORT, { timeout: 3000 });
+                serverStatus = 'ONLINE';
+                lastPingLatency = response.roundTripLatency;
+                log(`🟢 [SERVER LIVE DETAILS] Status: ONLINE | Players: ${response.players.online}/${response.players.max} | Ping: ${lastPingLatency}ms`);
+                connectBot();
+            } catch (err) {
+                serverStatus = 'OFFLINE';
+                lastPingLatency = null;
+                log(`🔴 [SERVER LIVE DETAILS] Status: OFFLINE (Aternos band hai ya start ho raha hai). Reason: ${err.message}`);
+            }
         }
     }, 8000);
 }
@@ -222,7 +239,7 @@ function connectBot() {
     if (botStatus === 'CONNECTING' || botStatus === 'CONNECTED') return;
 
     botStatus = 'CONNECTING';
-    log(`🤖 Attempting to join server (${CONFIG.BOT_USERNAME})...`);
+    log(`🤖 [BOT PROBLEM CHECK] Attempting to join server as '${CONFIG.BOT_USERNAME}'...`);
 
     try {
         bot = mineflayer.createBot({
@@ -236,120 +253,61 @@ function connectBot() {
 
         bot.on('spawn', () => {
             botStatus = 'CONNECTED';
-            log('✅ Bot successfully joined the server and started roaming!');
-            sendDiscordAlert('🟢 Bot Joined', `${CONFIG.BOT_USERNAME} has entered the server.`, 0x00ff66);
-
+            log(`✅ [BOT STATUS] Successfully spawned in-game! Roaming & Anti-AFK active.`);
             startDynamicRoaming(bot);
 
             if (CONFIG.BOT_PASSWORD) {
                 setTimeout(() => {
                     bot.chat(`/register ${CONFIG.BOT_PASSWORD} ${CONFIG.BOT_PASSWORD}`);
                     bot.chat(`/login ${CONFIG.BOT_PASSWORD}`);
+                    log(`🔑 [BOT AUTH] Login command sent to server.`);
                 }, 2000);
             }
         });
 
         bot.on('death', () => {
-            log('💀 Bot died! Respawning...');
+            log('💀 [BOT EVENT] Bot mar gaya! Respawn trigger ho raha hai...');
             setTimeout(() => { if (bot) bot.respawn(); }, 2000);
         });
 
-        bot.on('health', async () => {
-            if (bot.food < 15) {
-                const food = bot.inventory.items().find(i => i.name.includes('cooked') || i.name.includes('bread') || i.name.includes('apple'));
-                if (food) {
-                    try {
-                        await bot.equip(food, 'hand');
-                        await bot.consume();
-                    } catch (e) {}
-                }
-            }
-        });
-
-        bot.on('chat', (username, message) => {
-            if (username === bot.username) return;
-            const args = message.trim().split(' ');
-            const cmd = args[0].toLowerCase();
-
-            if (cmd === '!follow') {
-                const targetPlayer = args[1] ? args[1] : username;
-                const target = bot.players[targetPlayer]?.entity;
-                if (!target) {
-                    bot.chat(`[Sentinel] ${targetPlayer} nahi dikh raha.`);
-                    return;
-                }
-                bot.chat(`[Sentinel] ${targetPlayer} ke peeche chal raha hoon.`);
-                const defaultMove = new Movements(bot, require('minecraft-data')(bot.version));
-                defaultMove.allowFreeClearance = true;
-                bot.pathfinder.setMovements(defaultMove);
-                bot.pathfinder.setGoal(new GoalNear(target.position.x, target.position.y, target.position.z, 2), true);
-            } else if (cmd === '!stop') {
-                bot.chat('[Sentinel] Ruka hua hoon.');
-                bot.pathfinder.setGoal(null);
-                bot.clearControlStates();
-            } else if (cmd === '!coords') {
-                const pos = bot.entity.position;
-                bot.chat(`[Sentinel] X:${Math.round(pos.x)} Y:${Math.round(pos.y)} Z:${Math.round(pos.z)}`);
-            } else if (cmd === '!status') {
-                bot.chat(`[Sentinel] HP: ${Math.round(bot.health || 20)}/20 | Food: ${Math.round(bot.food || 20)}/20`);
-            }
+        bot.on('kicked', (reason) => {
+            log(`⚠️ [BOT PROBLEM] Bot ko server se kick kar diya gaya! Reason: ${reason}`);
         });
 
         bot.on('end', () => {
             botStatus = 'DISCONNECTED';
             if (bot && bot.stopRoaming) bot.stopRoaming();
-            log('🔴 Bot disconnected from server.');
+            log('🔴 [BOT STATUS] Bot connection ended (Disconnected).');
             bot = null;
         });
 
         bot.on('error', (err) => {
             botStatus = 'DISCONNECTED';
             if (bot && bot.stopRoaming) bot.stopRoaming();
-            log(`⚠️ Bot connection error: ${err.message}`);
+            log(`❌ [BOT PROBLEM ERROR] Bot connection error aaya: ${err.message}`);
             bot = null;
         });
 
     } catch (e) {
         botStatus = 'DISCONNECTED';
-        log(`❌ Bot init error: ${e.message}`);
+        log(`❌ [BOT INIT EXCEPTION] Bot initialize nahi ho paya: ${e.message}`);
     }
 }
 
 // ================= WATCHDOG & KEEP-ALIVE =================
 function startWatchdogs() {
-    log('🚀 Unified Server & Bot Watchdog Activated.');
+    log('🚀 [SYSTEM] Unified Server & Bot Watchdog Activated.');
 
-    // Server status monitoring & instant join trigger
-    setInterval(async () => {
-        if (watchdogPaused) return;
-        try {
-            await util.status(CONFIG.SERVER_HOST, CONFIG.SERVER_PORT, { timeout: 3000 });
-            if (serverStatus !== 'ONLINE') {
-                log('🟢 Server is confirmed ONLINE!');
-                serverStatus = 'ONLINE';
-            }
-            if (botStatus === 'DISCONNECTED') {
-                connectBot();
-            }
-        } catch (err) {
-            if (serverStatus === 'ONLINE') log('🔴 Server went OFFLINE.');
-            serverStatus = 'OFFLINE';
-            botStatus = 'DISCONNECTED';
-        }
-    }, CONFIG.BOT_CHECK_INTERVAL_SEC * 1000);
-
-    // Auto-start trigger for Aternos
     setInterval(async () => {
         if (watchdogPaused) return;
         if (serverStatus === 'OFFLINE' && !isPuppeteerRunning) {
             if (Date.now() - lastStartAttemptTime >= CONFIG.COOLDOWN_MS) {
-                log('🔄 [Auto-Start] Triggering Aternos boot sequence...');
+                log('🔄 [WATCHDOG] Server offline hone ki wajah se Aternos Auto-Start trigger kar rahe hain...');
                 await executeAternosStartSequence();
             }
         }
     }, CONFIG.AUTOSTART_INTERVAL_SEC * 1000);
 
-    // Keep-alive loop for Render free tier
     if (CONFIG.RENDER_EXTERNAL_URL) {
         setInterval(async () => {
             try {
@@ -358,7 +316,6 @@ function startWatchdogs() {
         }, 240000);
     }
 
-    // Start 8-second continuous rejoin worker
     startReconnectionLoop();
 }
 
@@ -368,19 +325,20 @@ app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
         <html>
-        <head><title>Aternos Sentinel Unified</title><meta http-equiv="refresh" content="5"></head>
+        <head><title>Aternos Sentinel Dashboard</title><meta http-equiv="refresh" content="5"></head>
         <body style="background:#090d16;color:#e6edf3;font-family:monospace;padding:20px;">
-            <h2>⚡ ATERNOS SENTINEL (COMBINED ENGINE)</h2>
-            <p>Server: <b>${CONFIG.SERVER_HOST}:${CONFIG.SERVER_PORT}</b></p>
-            <p>Status: <b style="color:${serverStatus === 'ONLINE' ? '#3fb950' : '#f85149'};">${serverStatus}</b> | Bot: <b>${botStatus}</b> | Watchdog: <b>${watchdogPaused ? 'PAUSED' : 'ACTIVE'}</b></p>
+            <h2>⚡ ATERNOS SENTINEL LIVE DASHBOARD</h2>
+            <p>Server Host: <b>${CONFIG.SERVER_HOST}:${CONFIG.SERVER_PORT}</b></p>
+            <p>Server Status: <b style="color:${serverStatus === 'ONLINE' ? '#3fb950' : '#f85149'};">${serverStatus}</b> ${lastPingLatency ? `(${lastPingLatency}ms)` : ''}</p>
+            <p>Bot Status: <b style="color:${botStatus === 'CONNECTED' ? '#3fb950' : '#d29922'};">${botStatus}</b></p>
             <p>
-                <a href="/start" style="background:#238636;color:white;padding:8px 12px;text-decoration:none;border-radius:4px;display:inline-block;margin-right:10px;">⚡ Force Start</a>
+                <a href="/start" style="background:#238636;color:white;padding:8px 12px;text-decoration:none;border-radius:4px;display:inline-block;margin-right:10px;">⚡ Force Start Server</a>
                 <a href="/toggle" style="background:#8957e5;color:white;padding:8px 12px;text-decoration:none;border-radius:4px;display:inline-block;">⏯️ Toggle Watchdog</a>
             </p>
             <hr style="border:1px solid #30363d;"/>
-            <h3>Live System Logs</h3>
-            <div style="background:#010409;padding:12px;border-radius:6px;max-height:300px;overflow-y:auto;">
-                ${logs.map(l => `<div style="color:#7ee787;margin-bottom:3px;">${l}</div>`).join('')}
+            <h3>Live Detailed Console Logs</h3>
+            <div style="background:#010409;padding:12px;border-radius:6px;max-height:350px;overflow-y:auto;font-size:12px;">
+                ${logs.map(l => `<div style="color:${l.includes('ERROR') || l.includes('PROBLEM') || l.includes('OFFLINE') ? '#f85149' : '#7ee787'};margin-bottom:4px;">${l}</div>`).join('')}
             </div>
         </body>
         </html>
@@ -395,11 +353,11 @@ app.get('/start', async (req, res) => {
 
 app.get('/toggle', (req, res) => {
     watchdogPaused = !watchdogPaused;
-    log(`⚠️ Watchdog manually ${watchdogPaused ? 'PAUSED' : 'RESUMED'}.`);
+    log(`⚠️ [WATCHDOG] Manually ${watchdogPaused ? 'PAUSED' : 'RESUMED'}.`);
     res.redirect('/');
 });
 
 app.listen(PORT, () => {
-    log(`🌐 Dashboard live on port ${PORT}`);
+    log(`🌐 [WEB] Dashboard live on port ${PORT}`);
     startWatchdogs();
 });
