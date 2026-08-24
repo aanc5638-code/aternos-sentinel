@@ -1,7 +1,7 @@
 {
-  "name": "aternos-sentinel-render",
-  "version": "2.0.0",
-  "description": "24/7 Aternos Auto-Starter and Bot",
+  "name": "aternos-sentinel-pro",
+  "version": "3.2.0",
+  "description": "24/7 Autonomous Aternos Server Controller and Stealth Mineflayer Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,8 +9,10 @@
   "dependencies": {
     "axios": "^1.6.8",
     "express": "^4.19.2",
+    "minecraft-data": "^3.55.0",
     "minecraft-server-util": "^5.4.1",
     "mineflayer": "^4.20.1",
+    "mineflayer-pathfinder": "^2.4.5",
     "puppeteer": "^22.6.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
