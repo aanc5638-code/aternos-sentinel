@@ -22,6 +22,5 @@ jobs:
 
       - name: Run Starter Script
         env:
-          ATERNOS_USER: ${{ secrets.ATERNOS_USER }}
-          ATERNOS_PASS: ${{ secrets.ATERNOS_PASS }}
+          ATERNOS_SESSION: ${{ secrets.ATERNOS_SESSION }}
         run: node starter.js
