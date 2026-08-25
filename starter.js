@@ -31,26 +31,38 @@ const ATERNOS_SESSION = process.env.ATERNOS_SESSION;
         });
 
         console.log('🌐 Direct server panel open kar rahe hain...');
-        await page.goto('https://aternos.org/server/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto('https://aternos.org/servers/', { waitUntil: 'networkidle2', timeout: 60000 });
 
+        // Cookie banner accept
         try {
-            const consentBtn = await page.waitForSelector('.fc-cta-consent, .cookie-consent-accept, button[aria-label="Consent"]', { timeout: 5000 });
+            const consentBtn = await page.waitForSelector('.fc-cta-consent, .cookie-consent-accept, button[aria-label="Consent"]', { timeout: 4000 });
             if (consentBtn) await consentBtn.click();
         } catch (e) {}
 
-        if (page.url().includes('/servers/')) {
-            const firstServer = await page.waitForSelector('.serverbox, .server-body', { timeout: 15000 });
-            if (firstServer) {
-                await firstServer.click();
-                await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+        // Server select karein (list me se pehla server)
+        const serverSelector = '.serverbox, .server-body, .server';
+        await page.waitForSelector(serverSelector, { timeout: 20000 });
+        await page.click(serverSelector);
+        await new Promise(r => setTimeout(r, 4000));
+
+        // Check if already online
+        const isOnline = await page.evaluate(() => {
+            const body = document.body.innerText;
+            return body.includes('Online') || body.includes('Starting') || body.includes('Loading');
+        });
+
+        if (isOnline) {
+            console.log('🟢 Server pehle se hi STARTING / ONLINE state mein hai!');
+        } else {
+            // Click start button
+            const startBtn = await page.waitForSelector('#start, .btn-start, [id="start"]', { visible: true, timeout: 20000 });
+            if (startBtn) {
+                await startBtn.click();
+                console.log('🟢 [SUCCESS] Start button clicked!');
             }
         }
 
-        const startBtn = '#start, .btn-start, [id="start"]';
-        await page.waitForSelector(startBtn, { timeout: 30000 });
-        await page.click(startBtn);
-        console.log('🟢 [SUCCESS] Start button clicked successfully!');
-
+        // Queue confirm popup agar aaye
         try {
             const confirmBtn = await page.waitForSelector('#confirm, .btn-confirm, [id="confirm"]', { visible: true, timeout: 8000 });
             if (confirmBtn) {
@@ -59,8 +71,8 @@ const ATERNOS_SESSION = process.env.ATERNOS_SESSION;
             }
         } catch (e) {}
 
-        await new Promise(r => setTimeout(r, 8000));
-        console.log('🎉 Server start command delivered!');
+        await new Promise(r => setTimeout(r, 6000));
+        console.log('🎉 Server auto-start process completed!');
 
     } catch (err) {
         console.log(`❌ Error: ${err.message}`);
