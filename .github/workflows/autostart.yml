@@ -1,0 +1,27 @@
+name: Aternos Auto-Starter
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+
+jobs:
+  start-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Dependencies
+        run: npm install puppeteer-extra puppeteer-extra-plugin-stealth puppeteer
+
+      - name: Run Starter Script
+        env:
+          ATERNOS_USER: ${{ secrets.ATERNOS_USER }}
+          ATERNOS_PASS: ${{ secrets.ATERNOS_PASS }}
+        run: node starter.js
